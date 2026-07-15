@@ -1,0 +1,10 @@
+title = "gitleaks config for ledger-api"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow Sealed Secrets encrypted payloads — asymmetrically encrypted, safe to commit by design, only decryptable by the in-cluster controller."
+paths = [
+  '''deploy/sealed-secret\.yaml'''
+]

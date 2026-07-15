@@ -25,7 +25,7 @@ jobs:
       - name: Run gitleaks (full scan, no base/head diff)
         run: |
           docker run --rm -v "$PWD":/repo zricethezav/gitleaks:latest \
-            detect --source="/repo" --no-git -v --exit-code 1 \
+            detect --source="/repo" --no-git -v --exit-code 1 --config="/repo/.gitleaks.toml" \
             --report-format sarif --report-path /repo/gitleaks-results.sarif
         # Fail policy: HARD BLOCK. Any verified secret match fails the job
         # and stops the pipeline. Scans the full working tree directly
