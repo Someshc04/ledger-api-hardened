@@ -8,8 +8,8 @@ on:
 permissions:
   contents: read
   packages: write
-  id-token: write      # required for Cosign keyless signing (OIDC)
-  security-events: write # required to upload SARIF to the Security tab
+  id-token: write
+  security-events: write
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/ledger-api
@@ -21,18 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # gitleaks needs full history, not just latest commit
-      - name: Run gitleaks (full repo scan)
+          fetch-depth: 0
+      - name: Run gitleaks (full scan, no base/head diff)
         run: |
-          docker run -v "$PWD":/repo zricethezav/gitleaks:latest \
+          docker run --rm -v "$PWD":/repo zricethezav/gitleaks:latest \
             detect --source="/repo" --no-git -v --exit-code 1 \
-            --report-format sarif --report-path /repo/gitleaks-results.sarif || \
-          docker run -v "$PWD":/repo zricethezav/gitleaks:latest \
-            detect --source="/repo" -v --exit-code 1 \
             --report-format sarif --report-path /repo/gitleaks-results.sarif
         # Fail policy: HARD BLOCK. Any verified secret match fails the job
-        # and stops the pipeline. Full working-tree + git-history scan
-        # (not a base/head diff) to avoid CI event payload SHA mismatches.
+        # and stops the pipeline. Scans the full working tree directly
+        # (--no-git) rather than diffing commit SHAs from the push event,
+        # which was unreliable after this repo's remote was repointed.
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -50,12 +48,6 @@ jobs:
           config: p/security-audit p/python p/flask
           generateSarif: "1"
         continue-on-error: true
-        # Fail policy: WARN for most findings (uploaded to Security tab for
-        # visibility), HARD BLOCK only on 'ERROR' severity findings matching
-        # known-exploitable patterns (e.g. unsafe deserialization, SSRF).
-        # Semgrep's own exit code handles this distinction; continue-on-error
-        # here lets us upload SARIF even on findings, then a separate gate
-        # below fails the pipeline on critical findings specifically.
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -76,12 +68,6 @@ jobs:
           output: trivy-fs-results.sarif
           severity: CRITICAL,HIGH
           exit-code: 1
-        # Fail policy: HARD BLOCK on CRITICAL or HIGH severity CVEs in
-        # dependencies (requirements.txt). MEDIUM/LOW are recorded but do
-        # not block. A CVE with no available fix yet is handled via an
-        # explicit .trivyignore entry with a comment justifying the
-        # temporary acceptance and a follow-up ticket reference — never
-        # silently ignored.
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -96,14 +82,12 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push (immutable tag by commit SHA)
         id: push
         uses: docker/build-push-action@v6
@@ -111,8 +95,6 @@ jobs:
           context: ./app
           push: true
           tags: ${{ env.IMAGE }}:${{ github.sha }}
-          # Note: no :latest tag pushed — matches the Kyverno policy from
-          # Task 1 that rejects :latest at deploy time.
 
   image-scan:
     name: Image Scan (Trivy - container)
@@ -127,9 +109,6 @@ jobs:
           output: trivy-image-results.sarif
           severity: CRITICAL,HIGH
           exit-code: 1
-        # Fail policy: same as dependency-scan — HARD BLOCK on CRITICAL/HIGH
-        # in the final built image (catches OS-package CVEs in the base
-        # image, not just Python deps).
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -144,14 +123,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-
       - name: Sign image (keyless)
         run: |
           cosign sign --yes \
             ${{ env.IMAGE }}@${{ needs.build-and-push.outputs.digest }}
-        # Keyless signing uses GitHub's OIDC token to prove the signature
-        # came from this exact workflow run — no private key to manage or leak.
-
       - name: Generate SLSA-style provenance attestation
         run: |
           cosign attest --yes \
@@ -170,9 +145,6 @@ jobs:
             }') \
             --type slsaprovenance \
             ${{ env.IMAGE }}@${{ needs.build-and-push.outputs.digest }}
-        # Fail policy: HARD BLOCK — if signing fails, the pipeline stops
-        # here. An unsigned image never reaches deployment; this is enforced
-        # a second time at admission via the Kyverno verifyImages policy.
 
   deploy-gitops:
     name: Update GitOps manifest (ArgoCD source of truth)
@@ -188,6 +160,3 @@ jobs:
           git add deploy/deployment.yaml
           git commit -m "ci: deploy ${{ github.sha }}" || echo "no changes"
           git push
-        # This commit is what ArgoCD watches — it syncs cluster state to
-        # match this file automatically. The pipeline never touches the
-        # cluster directly; it only updates the desired state in git.
