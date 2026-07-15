@@ -22,14 +22,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # gitleaks needs full history, not just latest commit
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run gitleaks (full repo scan)
+        run: |
+          docker run -v "$PWD":/repo zricethezav/gitleaks:latest \
+            detect --source="/repo" --no-git -v --exit-code 1 \
+            --report-format sarif --report-path /repo/gitleaks-results.sarif || \
+          docker run -v "$PWD":/repo zricethezav/gitleaks:latest \
+            detect --source="/repo" -v --exit-code 1 \
+            --report-format sarif --report-path /repo/gitleaks-results.sarif
         # Fail policy: HARD BLOCK. Any verified secret match fails the job
-        # and stops the pipeline — no downstream job runs. Secrets in git
-        # history are treated as already-compromised regardless of current
-        # file state, so this scans full history, not just the diff.
+        # and stops the pipeline. Full working-tree + git-history scan
+        # (not a base/head diff) to avoid CI event payload SHA mismatches.
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gitleaks-results.sarif
 
   sast:
     name: SAST (Semgrep)
