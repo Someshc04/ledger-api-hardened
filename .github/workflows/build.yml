@@ -141,7 +141,7 @@ jobs:
           cosign attest --yes \
             --predicate <(echo '{
               "buildType": "github-actions",
-              "builder": "${{ github.workflow }}",
+              "builder": {"id": "${{ github.repositoryUrl }}/actions/workflows/build.yml"},
               "invocation": {
                 "configSource": {
                   "uri": "${{ github.repositoryUrl }}",
