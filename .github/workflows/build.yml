@@ -159,6 +159,8 @@ jobs:
     name: Update GitOps manifest (ArgoCD source of truth)
     needs: sign-and-attest
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Update image tag in manifest
